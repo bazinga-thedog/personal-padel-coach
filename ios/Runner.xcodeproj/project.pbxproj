@@ -471,15 +471,6 @@
 				buildImplicitDependencies = YES;
 				parallelizeBuildables = YES;
 			};
-		97C147091CF9000F007C117D /* BuildActionEntry */ = {
-			isa = XCSchemeBuildActionEntry;
-			buildForAnalyzing = YES;
-			buildForArchiving = YES;
-			buildForProfiling = YES;
-			buildForRunning = YES;
-			buildForTesting = YES;
-			buildableReference = 97C146ED1CF9000F007C117D /* Runner.app */;
-		};
 			launchAction = {
 				buildConfiguration = Debug;
 				selectedDebuggerIdentifier = Xcode.DebuggerFoundation.Debugger.LLDB;
@@ -495,6 +486,15 @@
 				selectedLauncherIdentifier = Xcode.DebuggerFoundation.Launcher.LLDB;
 				shouldUseLaunchSchemeArgsEnv = YES;
 			};
+		};
+		97C147091CF9000F007C117D /* BuildActionEntry */ = {
+			isa = XCSchemeBuildActionEntry;
+			buildForAnalyzing = YES;
+			buildForArchiving = YES;
+			buildForProfiling = YES;
+			buildForRunning = YES;
+			buildForTesting = YES;
+			buildableReference = 97C146ED1CF9000F007C117D /* Runner.app */;
 		};
 /* End XCSchemeList section */
 	};
