@@ -133,6 +133,10 @@
 					};
 				};
 			};
+			packageReferences = (
+			);
+			packageProductDependencies = (
+			);
 			buildConfigurationList = 97C146E91CF9000F007C117D /* Build configuration list for PBXProject "Runner" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
@@ -455,6 +459,44 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCSchemeList section */
+		97C147081CF9000F007C117D /* Runner.xcscheme */ = {
+			isa = XCScheme;
+			buildAction = {
+				buildActionEntries = (
+					97C147091CF9000F007C117D /* BuildActionEntry */,
+				);
+				buildConfiguration = Debug;
+				buildImplicitDependencies = YES;
+				parallelizeBuildables = YES;
+			};
+		97C147091CF9000F007C117D /* BuildActionEntry */ = {
+			isa = XCSchemeBuildActionEntry;
+			buildForAnalyzing = YES;
+			buildForArchiving = YES;
+			buildForProfiling = YES;
+			buildForRunning = YES;
+			buildForTesting = YES;
+			buildableReference = 97C146ED1CF9000F007C117D /* Runner.app */;
+		};
+			launchAction = {
+				buildConfiguration = Debug;
+				selectedDebuggerIdentifier = Xcode.DebuggerFoundation.Debugger.LLDB;
+				selectedLauncherIdentifier = Xcode.DebuggerFoundation.Launcher.LLDB;
+			};
+			profileAction = {
+				buildConfiguration = Release;
+				shouldUseLaunchSchemeArgsEnv = YES;
+			};
+			testAction = {
+				buildConfiguration = Debug;
+				selectedDebuggerIdentifier = Xcode.DebuggerFoundation.Debugger.LLDB;
+				selectedLauncherIdentifier = Xcode.DebuggerFoundation.Launcher.LLDB;
+				shouldUseLaunchSchemeArgsEnv = YES;
+			};
+		};
+/* End XCSchemeList section */
 	};
 	rootObject = 97C146E61CF9000F007C117D /* Project object */;
 } 
