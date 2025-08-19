@@ -3,6 +3,7 @@ import 'package:fluttertoast/fluttertoast.dart';
 import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -115,12 +116,18 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
             bitRate: 128000,
           );
         } else {
-          // On mobile, specify a full path
+          // On mobile, use app documents directory
+          final appDir = await getApplicationDocumentsDirectory();
+          final recordingPath = '${appDir.path}/$fileName';
+          
           await _audioRecorder.start(
-            path: '/tmp/$fileName',
+            path: recordingPath,
             encoder: AudioEncoder.aacLc,
             bitRate: 128000,
           );
+          
+          // Store the path for later use
+          _recordedFilePath = recordingPath;
         }
 
         setState(() {
@@ -161,13 +168,31 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
       final String? path = await _audioRecorder.stop();
       setState(() {
         _isRecording = false;
-        if (path != null) {
+        // Use the path we set during start, or fall back to the returned path
+        if (_recordedFilePath == null && path != null) {
           _recordedFilePath = path;
         }
       });
       
-      if (path != null) {
-        _showToast('Recording completed! Duration: ${_recordingDuration.inSeconds}s');
+      if (_recordedFilePath != null) {
+        _showToast('Recording completed! Duration: ${_recordingDuration.inSeconds}s, Path: $_recordedFilePath');
+        
+        // Debug: Check if file exists
+        if (!kIsWeb) {
+          try {
+            final file = File(_recordedFilePath!);
+            if (await file.exists()) {
+              final size = await file.length();
+              _showToast('File exists, size: ${size} bytes');
+            } else {
+              _showToast('File does not exist at path: $_recordedFilePath');
+            }
+          } catch (e) {
+            _showToast('Error checking file: $e');
+          }
+        }
+      } else {
+        _showToast('Recording stopped but no path available');
       }
     } catch (e) {
       _showToast('Error stopping recording: $e');
@@ -180,10 +205,23 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
       return;
     }
 
+    _showToast('Attempting to play: $_recordedFilePath');
+
     // Check if file exists (only on mobile)
-    if (!kIsWeb && !File(_recordedFilePath!).existsSync()) {
-      _showToast('Recording file not found');
-      return;
+    if (!kIsWeb) {
+      try {
+        final file = File(_recordedFilePath!);
+        if (await file.exists()) {
+          final size = await file.length();
+          _showToast('File found, size: ${size} bytes');
+        } else {
+          _showToast('File not found at: $_recordedFilePath');
+          return;
+        }
+      } catch (e) {
+        _showToast('Error checking file: $e');
+        return;
+      }
     }
 
     try {
@@ -194,6 +232,7 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
           _playbackPosition = Duration.zero;
         });
       } else {
+        _showToast('Starting playback...');
         await _audioPlayer.play(DeviceFileSource(_recordedFilePath!));
         setState(() {
           _isPlaying = true;
