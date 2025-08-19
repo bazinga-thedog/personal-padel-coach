@@ -88,6 +88,8 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
   static const int mlSampleRate = 16000; // ML model sample rate
   List<double> _mlAudioBuffer = [];
   List<double> _mlPredictions = [];
+  
+
 
   @override
   void initState() {
@@ -544,21 +546,47 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
     try {
       _showToast('Loading ML VAD model...');
       
-      // Load the VAD model
-      _vadInterpreter = await Interpreter.fromAsset('assets/vad_model.tflite');
-      
-      if (_vadInterpreter != null) {
-        _mlModelLoaded = true;
-        _showToast('ML VAD model loaded successfully');
-        
-        // Initialize audio buffer
-        _mlAudioBuffer = List.filled(mlInputSize, 0.0);
-        _mlPredictions = List.filled(1, 0.0);
-        
-        _showToast('ML Voice Activity Detection ready');
+      // Check if we're on iOS and handle TensorFlow Lite compatibility
+      if (Platform.isIOS) {
+        try {
+          // Load the VAD model with iOS-specific error handling
+          _vadInterpreter = await Interpreter.fromAsset('assets/vad_model.tflite');
+          
+          if (_vadInterpreter != null) {
+            _mlModelLoaded = true;
+            _showToast('ML VAD model loaded successfully on iOS');
+            
+            // Initialize audio buffer
+            _mlAudioBuffer = List.filled(mlInputSize, 0.0);
+            _mlPredictions = List.filled(1, 0.0);
+            
+            _showToast('ML Voice Activity Detection ready');
+          } else {
+            _showToast('Failed to load ML model on iOS, using fallback VAD');
+            _mlVadEnabled = false;
+          }
+        } catch (iosError) {
+          _showToast('iOS ML VAD error: $iosError - using fallback VAD');
+          _mlVadEnabled = false;
+          _mlModelLoaded = false;
+        }
       } else {
-        _showToast('Failed to load ML model, using fallback VAD');
-        _mlVadEnabled = false;
+        // Non-iOS platforms
+        _vadInterpreter = await Interpreter.fromAsset('assets/vad_model.tflite');
+        
+        if (_vadInterpreter != null) {
+          _mlModelLoaded = true;
+          _showToast('ML VAD model loaded successfully');
+          
+          // Initialize audio buffer
+          _mlAudioBuffer = List.filled(mlInputSize, 0.0);
+          _mlPredictions = List.filled(1, 0.0);
+          
+          _showToast('ML Voice Activity Detection ready');
+        } else {
+          _showToast('Failed to load ML model, using fallback VAD');
+          _mlVadEnabled = false;
+        }
       }
     } catch (e) {
       _showToast('ML VAD initialization failed: $e');
@@ -600,8 +628,17 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
       var input = [processedAudio];
       var output = [_mlPredictions];
       
-      // Run inference
-      _vadInterpreter!.run(input, output);
+      // Run inference with iOS-specific error handling
+      if (Platform.isIOS) {
+        try {
+          _vadInterpreter!.run(input, output);
+        } catch (iosError) {
+          _showToast('iOS ML inference error: $iosError');
+          return 0.0;
+        }
+      } else {
+        _vadInterpreter!.run(input, output);
+      }
       
       // Return prediction (probability of voice activity)
       return output[0][0].toDouble();
