@@ -1,5 +1,5 @@
 # Uncomment this line to define a global platform for your project
-platform :ios, '12.0'
+platform :ios, '13.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -31,7 +31,8 @@ target 'Runner' do
   use_frameworks! :linkage => :static
   use_modular_headers!
 
-  pod 'TensorFlowLiteSwift'
+  # Ensure TensorFlowLite C API is linked so TfLiteModelCreate is available
+  pod 'TensorFlowLiteC'
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 end
@@ -50,6 +51,11 @@ post_install do |installer|
         config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
         config.build_settings['VALID_ARCHS'] = 'arm64 x86_64'
         config.build_settings['ONLY_ACTIVE_ARCH'] = 'NO'
+        config.build_settings['OTHER_LDFLAGS'] = '$(inherited) -framework Accelerate -framework CoreML -framework Metal'
+        config.build_settings['CLANG_WARN_DOCUMENTATION_COMMENTS'] = 'NO'
+        config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= ['$(inherited)']
+        config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'TF_LITE_STATIC_MEMORY=1'
+        config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'TF_LITE_USE_CORE_ML=1'
       end
     end
   end
