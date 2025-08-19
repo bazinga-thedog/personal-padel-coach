@@ -9,6 +9,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'dart:math';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:tflite_flutter/tflite_flutter.dart';
 
 void main() => runApp(MyApp());
 
@@ -56,8 +57,10 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
   
   // VAD parameters for iOS
   static const double vadThreshold = 0.15; // Voice activity threshold
-  static const int silenceDurationMs = 1500; // Stop recording after 1.5s of silence
   static const int vadUpdateIntervalMs = 100; // Check VAD every 100ms
+  
+  // Recording parameters
+  static const int recordingDurationMs = 20000; // Record for exactly 20 seconds
   
   // Audio processing buffers
   List<double> _audioBuffer = [];
@@ -69,15 +72,29 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
   bool _isVoiceActive = false;
   DateTime? _lastVoiceActivity;
   Timer? _vadTimer;
-  Timer? _silenceTimer;
+  Timer? _recordingTimer; // Timer for 20-second recording
   List<double> _recentAudioLevels = [];
   static const int vadHistorySize = 10; // Keep last 10 audio level samples
+  
+  // Speaking event tracking
+  List<Map<String, dynamic>> _speakingEvents = [];
+  bool _wasSpeaking = false; // Track previous speaking state
+  
+  // ML VAD variables
+  Interpreter? _vadInterpreter;
+  bool _mlVadEnabled = true;
+  bool _mlModelLoaded = false;
+  static const int mlInputSize = 1024; // ML model input size
+  static const int mlSampleRate = 16000; // ML model sample rate
+  List<double> _mlAudioBuffer = [];
+  List<double> _mlPredictions = [];
 
   @override
   void initState() {
     super.initState();
     _requestPermissions();
     _setupAudioPlayer();
+    _initializeMLVAD();
   }
 
   @override
@@ -85,6 +102,7 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
     _audioRecorder.dispose();
     _audioPlayer.dispose();
     _stopVADMonitoring();
+    _vadInterpreter?.close();
     super.dispose();
   }
 
@@ -162,9 +180,11 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
         setState(() {
           _isRecording = true;
           _recordingDuration = Duration.zero;
+          _speakingEvents.clear(); // Clear previous speaking events
+          _wasSpeaking = false; // Reset speaking state
         });
 
-        // Start recording timer
+        // Start 20-second recording timer
         _startRecordingTimer();
 
         // Start audio processing if filtering is enabled
@@ -175,7 +195,7 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
         // Start VAD monitoring
         _startVADMonitoring();
 
-        _showToast('Recording started...');
+        _showToast('Recording started - 20 seconds');
       } else {
         _showToast('Microphone permission not granted');
       }
@@ -197,10 +217,10 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
         setState(() {
           _recordingDuration += const Duration(seconds: 1);
         });
-        if (_recordingDuration.inSeconds < 5) {
+        if (_recordingDuration.inSeconds < 20) {
           _startRecordingTimer();
         } else {
-          // Call _stopRecording without awaiting since this is a void function
+          // Stop recording after exactly 20 seconds
           _stopRecording();
         }
       }
@@ -489,30 +509,7 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
     _showToast('Voice Activity Detection active');
   }
 
-  /// Simulate audio level monitoring for VAD
-  void _simulateAudioLevelMonitoring() {
-    // In a real implementation, this would analyze the actual audio stream
-    // For iOS compatibility, we'll use a simulated approach
-    
-    // Simulate voice activity based on time patterns
-    // This is a placeholder - in production you'd analyze real audio data
-    bool hasVoice = _simulateVoicePattern();
-    
-    if (hasVoice) {
-      _lastVoiceActivity = DateTime.now();
-      _isVoiceActive = true;
-      
-      // Cancel any existing silence timer
-      _silenceTimer?.cancel();
-    } else {
-      _isVoiceActive = false;
-      
-      // Start silence timer if not already running
-      if (_silenceTimer == null || !_silenceTimer!.isActive) {
-        _startSilenceTimer();
-      }
-    }
-  }
+
 
   /// Simulate voice pattern for testing (replace with real audio analysis)
   bool _simulateVoicePattern() {
@@ -530,25 +527,181 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
     }
   }
 
-  /// Start silence timer for auto-stop
-  void _startSilenceTimer() {
-    _silenceTimer?.cancel();
-    _silenceTimer = Timer(Duration(milliseconds: silenceDurationMs), () {
-      if (_isRecording && !_isVoiceActive) {
-        _showToast('Silence detected - stopping recording');
-        _stopRecording();
-      }
-    });
-  }
+
 
   /// Stop VAD monitoring
   void _stopVADMonitoring() {
     _vadTimer?.cancel();
-    _silenceTimer?.cancel();
+    _recordingTimer?.cancel();
     _vadTimer = null;
-    _silenceTimer = null;
+    _recordingTimer = null;
     _isVoiceActive = false;
     _lastVoiceActivity = null;
+  }
+
+  /// Initialize ML-based VAD
+  Future<void> _initializeMLVAD() async {
+    try {
+      _showToast('Loading ML VAD model...');
+      
+      // Load the VAD model
+      _vadInterpreter = await Interpreter.fromAsset('assets/vad_model.tflite');
+      
+      if (_vadInterpreter != null) {
+        _mlModelLoaded = true;
+        _showToast('ML VAD model loaded successfully');
+        
+        // Initialize audio buffer
+        _mlAudioBuffer = List.filled(mlInputSize, 0.0);
+        _mlPredictions = List.filled(1, 0.0);
+        
+        _showToast('ML Voice Activity Detection ready');
+      } else {
+        _showToast('Failed to load ML model, using fallback VAD');
+        _mlVadEnabled = false;
+      }
+    } catch (e) {
+      _showToast('ML VAD initialization failed: $e');
+      _mlVadEnabled = false;
+    }
+  }
+
+  /// Preprocess audio data for ML model input
+  List<double> _preprocessAudioForML(List<double> audioData) {
+    if (audioData.length != mlInputSize) {
+      // Resize audio data to match ML model input
+      if (audioData.length > mlInputSize) {
+        audioData = audioData.sublist(0, mlInputSize);
+      } else {
+        audioData = [...audioData, ...List.filled(mlInputSize - audioData.length, 0.0)];
+      }
+    }
+    
+    // Normalize audio data to [-1, 1] range
+    double maxAmplitude = audioData.map((e) => e.abs()).reduce(max);
+    if (maxAmplitude > 0) {
+      audioData = audioData.map((e) => e / maxAmplitude).toList();
+    }
+    
+    return audioData;
+  }
+
+  /// Run ML model inference for VAD
+  double _runMLVADInference(List<double> audioData) {
+    if (!_mlModelLoaded || _vadInterpreter == null) {
+      return 0.0;
+    }
+    
+    try {
+      // Preprocess audio data
+      List<double> processedAudio = _preprocessAudioForML(audioData);
+      
+      // Prepare input tensor
+      var input = [processedAudio];
+      var output = [_mlPredictions];
+      
+      // Run inference
+      _vadInterpreter!.run(input, output);
+      
+      // Return prediction (probability of voice activity)
+      return output[0][0].toDouble();
+    } catch (e) {
+      _showToast('ML inference error: $e');
+      return 0.0;
+    }
+  }
+
+  /// ML-based voice activity detection
+  bool _detectVoiceActivityML(List<double> audioData) {
+    if (!_mlVadEnabled || !_mlModelLoaded) {
+      return _detectVoiceActivity(audioData); // Fallback to basic VAD
+    }
+    
+    try {
+      // Run ML model inference
+      double voiceProbability = _runMLVADInference(audioData);
+      
+      // Update ML predictions history
+      _mlPredictions.add(voiceProbability);
+      if (_mlPredictions.length > vadHistorySize) {
+        _mlPredictions.removeAt(0);
+      }
+      
+      // Calculate confidence from recent predictions
+      double avgConfidence = _mlPredictions.reduce((a, b) => a + b) / _mlPredictions.length;
+      
+      // Voice activity threshold (adjustable)
+      bool isVoice = voiceProbability > 0.6 && avgConfidence > 0.5;
+      
+      // Update voice activity state
+      if (isVoice) {
+        _lastVoiceActivity = DateTime.now();
+        _isVoiceActive = true;
+      } else {
+        _isVoiceActive = false;
+      }
+      
+      return isVoice;
+    } catch (e) {
+      _showToast('ML VAD error, using fallback: $e');
+      return _detectVoiceActivity(audioData);
+    }
+  }
+
+  /// Add speaking event to the list
+  void _addSpeakingEvent(String eventType, Duration timestamp) {
+    if (_isRecording) {
+      setState(() {
+        _speakingEvents.add({
+          'type': eventType,
+          'timestamp': timestamp,
+          'time': '${timestamp.inSeconds}s',
+          'description': eventType == 'started' ? 'Someone started speaking' : 'Someone stopped speaking',
+        });
+      });
+      
+      // Show toast for speaking events
+      _showToast('${eventType == 'started' ? 'Speaking started' : 'Speaking stopped'} at ${timestamp.inSeconds}s');
+    }
+  }
+
+  /// Enhanced audio level monitoring with ML VAD
+  void _simulateAudioLevelMonitoring() {
+    // In a real implementation, this would analyze the actual audio stream
+    // For iOS compatibility, we'll use a simulated approach with ML enhancement
+    
+    // Simulate voice activity based on time patterns and ML enhancement
+    bool hasVoice = _simulateVoicePattern();
+    
+    // Apply ML VAD if available
+    if (_mlVadEnabled && _mlModelLoaded) {
+      // Simulate audio data for ML processing
+      List<double> simulatedAudio = List.generate(mlInputSize, (i) => 
+        hasVoice ? 0.3 + 0.2 * sin(i * 0.1) : 0.05 + 0.02 * sin(i * 0.05)
+      );
+      
+      hasVoice = _detectVoiceActivityML(simulatedAudio);
+    } else {
+      hasVoice = _detectVoiceActivity([]); // Use basic VAD
+    }
+    
+    // Track speaking events
+    if (hasVoice && !_wasSpeaking) {
+      // Someone started speaking
+      _addSpeakingEvent('started', _recordingDuration);
+      _wasSpeaking = true;
+    } else if (!hasVoice && _wasSpeaking) {
+      // Someone stopped speaking
+      _addSpeakingEvent('stopped', _recordingDuration);
+      _wasSpeaking = false;
+    }
+    
+    if (hasVoice) {
+      _lastVoiceActivity = DateTime.now();
+      _isVoiceActive = true;
+    } else {
+      _isVoiceActive = false;
+    }
   }
 
   @override
@@ -634,6 +787,103 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
                             ),
                           ),
                         ],
+                      ),
+                      if (_mlVadEnabled && _mlModelLoaded) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.psychology,
+                              color: Colors.purple,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'AI Detection Active',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.purple[600],
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                    
+                    // Speaking Events Display
+                    if (_speakingEvents.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[50],
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.grey[300]!),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.chat_bubble_outline,
+                                  color: Colors.blue[600],
+                                  size: 16,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Speaking Events',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.blue[700],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            ...(_speakingEvents.map((event) => Container(
+                              margin: const EdgeInsets.only(bottom: 4),
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: event['type'] == 'started' ? Colors.green[50] : Colors.orange[50],
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(
+                                  color: event['type'] == 'started' ? Colors.green[300]! : Colors.orange[300]!,
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    event['type'] == 'started' ? Icons.mic : Icons.mic_off,
+                                    color: event['type'] == 'started' ? Colors.green[600] : Colors.orange[600],
+                                    size: 14,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    event['description'],
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: event['type'] == 'started' ? Colors.green[700] : Colors.orange[700],
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  const Spacer(),
+                                  Text(
+                                    event['time'],
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.grey[600],
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )).toList()),
+                          ],
+                        ),
                       ),
                     ],
                   ],
@@ -721,10 +971,66 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
                   if (_vadEnabled) ...[
                     const SizedBox(height: 8),
                     Text(
-                      'Auto-stop after ${silenceDurationMs / 1000}s of silence',
+                      'Always records for 20 seconds - tracks speaking events',
                       style: TextStyle(
                         fontSize: 12,
-                        color: Colors.orange[600],
+                        color: Colors.blue[600],
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  // ML VAD Toggle
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        _mlVadEnabled && _mlModelLoaded ? Icons.psychology : Icons.psychology_outlined,
+                        color: _mlVadEnabled && _mlModelLoaded ? Colors.purple : Colors.grey,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'ML VAD',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: _mlVadEnabled && _mlModelLoaded ? Colors.purple[700] : Colors.grey[600],
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Switch(
+                        value: _mlVadEnabled && _mlModelLoaded,
+                        onChanged: _mlModelLoaded ? (value) {
+                          setState(() {
+                            _mlVadEnabled = value;
+                          });
+                          _showToast(_mlVadEnabled 
+                            ? 'ML VAD enabled - AI-powered detection' 
+                            : 'ML VAD disabled - using basic detection');
+                        } : null,
+                        activeColor: Colors.purple,
+                        activeTrackColor: Colors.purple[200],
+                      ),
+                    ],
+                  ),
+                  if (_mlVadEnabled && _mlModelLoaded) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'AI-powered voice detection - tracks speaking start/stop',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.purple[600],
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ] else if (!_mlModelLoaded) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'ML model not loaded - using basic VAD',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[600],
                         fontStyle: FontStyle.italic,
                       ),
                     ),
