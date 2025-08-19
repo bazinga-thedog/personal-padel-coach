@@ -1,16 +1,72 @@
-# hello_world
+# Personal Padel Coach
 
-A new Flutter project.
+A Flutter application for personal padel coaching with voice recording capabilities.
 
-## Getting Started
+## Features
 
-This project is a starting point for a Flutter application.
+- **Voice Recording**: Record voice for up to 5 seconds with automatic stop
+- **Audio Playback**: Listen to recorded audio with progress tracking
+- **Modern UI**: Beautiful, responsive interface with smooth animations
+- **Cross-Platform**: Works on both Android and iOS
+- **Permission Handling**: Automatic microphone permission requests
 
-A few resources to get you started if this is your first Flutter project:
+## Setup
 
-- [Lab: Write your first Flutter app](https://flutter.io/docs/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://flutter.io/docs/cookbook)
+### Prerequisites
 
-For help getting started with Flutter, view our 
-[online documentation](https://flutter.io/docs), which offers tutorials, 
-samples, guidance on mobile development, and a full API reference.
+- Flutter SDK (>=2.12.0)
+- Android Studio / Xcode
+- Android SDK (API level 21+) / iOS 11.0+
+
+### Installation
+
+1. Clone the repository
+2. Install dependencies:
+   ```bash
+   flutter pub get
+   ```
+
+3. Run the app:
+   ```bash
+   flutter run
+   ```
+
+## Permissions
+
+### Android
+The app automatically requests the following permissions:
+- `RECORD_AUDIO` - For voice recording
+- `WRITE_EXTERNAL_STORAGE` - For saving recordings
+- `READ_EXTERNAL_STORAGE` - For accessing recordings
+
+### iOS
+The app requests microphone access with the description:
+"This app needs access to microphone to record voice for padel coaching sessions."
+
+## Dependencies
+
+- `record: ^5.0.4` - Audio recording functionality
+- `audioplayers: ^5.2.1` - Audio playback
+- `permission_handler: ^11.3.0` - Permission management
+- `fluttertoast: ^8.2.4` - Toast notifications
+
+## Usage
+
+1. **Recording**: Tap the "Record (5s)" button to start recording. The app will automatically stop after 5 seconds.
+2. **Playback**: Tap the "Play" button to listen to your recording. Tap "Stop" to stop playback.
+3. **Notes**: Use the text field to add notes about your recording.
+4. **Progress**: View recording duration and playback progress in real-time.
+
+## Architecture
+
+The app uses a stateful widget approach with:
+- Audio recording and playback state management
+- Permission handling
+- Real-time UI updates
+- Error handling with user-friendly messages
+
+## Troubleshooting
+
+- Ensure microphone permissions are granted
+- For Android, make sure the app has storage permissions
+- For iOS, check that microphone access is allowed in Settings
