@@ -4,7 +4,8 @@ import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
-import 'dart:async'; // Added missing import for Timer
+import 'dart:async';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 void main() => runApp(MyApp());
 
@@ -33,7 +34,7 @@ class VoiceRecorderDemo extends StatefulWidget {
 
 class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
   final TextEditingController _textController = TextEditingController();
-  final AudioRecorder _audioRecorder = AudioRecorder();
+  final Record _audioRecorder = Record();
   final AudioPlayer _audioPlayer = AudioPlayer();
   
   bool _isRecording = false;
@@ -58,13 +59,25 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
   }
 
   Future<void> _requestPermissions() async {
-    Map<Permission, PermissionStatus> statuses = await [
-      Permission.microphone,
-      Permission.storage,
-    ].request();
-    
-    if (statuses[Permission.microphone] != PermissionStatus.granted) {
-      _showToast('Microphone permission is required for voice recording');
+    if (kIsWeb) {
+      // On web, only request microphone permission
+      Map<Permission, PermissionStatus> statuses = await [
+        Permission.microphone,
+      ].request();
+      
+      if (statuses[Permission.microphone] != PermissionStatus.granted) {
+        _showToast('Microphone permission is required for voice recording');
+      }
+    } else {
+      // On mobile, request both microphone and storage permissions
+      Map<Permission, PermissionStatus> statuses = await [
+        Permission.microphone,
+        Permission.storage,
+      ].request();
+      
+      if (statuses[Permission.microphone] != PermissionStatus.granted) {
+        _showToast('Microphone permission is required for voice recording');
+      }
     }
   }
 
@@ -92,14 +105,23 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
   Future<void> _startRecording() async {
     try {
       if (await _audioRecorder.hasPermission()) {
-        await _audioRecorder.start(
-          const RecordConfig(
+        String fileName = 'recording_${DateTime.now().millisecondsSinceEpoch}.m4a';
+        
+        if (kIsWeb) {
+          // On web, use simple filename
+          await _audioRecorder.start(
+            path: fileName,
             encoder: AudioEncoder.aacLc,
             bitRate: 128000,
-            sampleRate: 44100,
-          ),
-          path: '/tmp/recording_${DateTime.now().millisecondsSinceEpoch}.m4a',
-        );
+          );
+        } else {
+          // On mobile, specify a full path
+          await _audioRecorder.start(
+            path: '/tmp/$fileName',
+            encoder: AudioEncoder.aacLc,
+            bitRate: 128000,
+          );
+        }
 
         setState(() {
           _isRecording = true;
@@ -153,8 +175,14 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
   }
 
   Future<void> _playRecording() async {
-    if (_recordedFilePath == null || !File(_recordedFilePath!).existsSync()) {
+    if (_recordedFilePath == null) {
       _showToast('No recording available to play');
+      return;
+    }
+
+    // Check if file exists (only on mobile)
+    if (!kIsWeb && !File(_recordedFilePath!).existsSync()) {
+      _showToast('Recording file not found');
       return;
     }
 
@@ -363,7 +391,7 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
             const SizedBox(height: 30),
             
             // Playback Progress
-            if (_recordedFilePath != null && File(_recordedFilePath!).existsSync()) ...[
+            if (_recordedFilePath != null && (kIsWeb || File(_recordedFilePath!).existsSync())) ...[
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(20),
