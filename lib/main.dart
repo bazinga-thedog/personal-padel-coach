@@ -1272,7 +1272,7 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
                     if (_lastVadError != null) ...[
                       const SizedBox(height: 4),
                       Text(
-                        'Occurred at: ${_lastVadError!.hour.toString().padLeft(2, '0')}:${_lastVadError!.minute.toString().padLeft(2, '0')}:${_lastVadError!.second.toString().padLeft(2, '0')}},
+                        'Occurred at: ${_lastVadError!.hour.toString().padLeft(2, '0')}:${_lastVadError!.minute.toString().padLeft(2, '0')}:${_lastVadError!.second.toString().padLeft(2, '0')}}',
                         style: TextStyle(
                           fontSize: 12,
                           color: _vadError != null && _vadError!.contains('ML') 
