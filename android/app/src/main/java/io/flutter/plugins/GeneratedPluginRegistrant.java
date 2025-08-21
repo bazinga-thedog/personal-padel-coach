@@ -45,5 +45,10 @@ public final class GeneratedPluginRegistrant {
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin record, com.llfbandit.record.RecordPlugin", e);
     }
+    try {
+      flutterEngine.getPlugins().add(new com.llfbandit.stts.SttsPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin stts, com.llfbandit.stts.SttsPlugin", e);
+    }
   }
 }

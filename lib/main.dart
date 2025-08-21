@@ -4,12 +4,12 @@ import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:stts/stts.dart';
 import 'dart:io';
 import 'dart:async';
-import 'dart:typed_data';
-import 'dart:math';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:tflite_flutter/tflite_flutter.dart';
+
 
 void main() => runApp(MyApp());
 
@@ -48,52 +48,19 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
   Duration _playbackPosition = Duration.zero;
   Duration _playbackDuration = Duration.zero;
   
-  // Audio filtering parameters
-  static const int sampleRate = 44100;
-  static const int fftSize = 2048;
-  static const double lowFreqCutoff = 80.0; // Hz - remove engine noise
-  static const double highFreqCutoff = 8000.0; // Hz - remove road noise above voice range
-  static const double noiseGateThreshold = 0.1; // Noise gate threshold
+
   
-  // VAD parameters for iOS
-  static const double vadThreshold = 0.15; // Voice activity threshold
-  static const int vadUpdateIntervalMs = 100; // Check VAD every 100ms
-  
-  // Recording parameters
-  static const int recordingDurationMs = 20000; // Record for exactly 20 seconds
-  
-  // Audio processing buffers
-  List<double> _audioBuffer = [];
-  List<double> _filteredBuffer = [];
+  // Audio processing
   bool _filteringEnabled = true;
   
-  // VAD state variables
-  bool _vadEnabled = true;
-  bool _isVoiceActive = false;
-  DateTime? _lastVoiceActivity;
-  Timer? _vadTimer;
-  Timer? _recordingTimer; // Timer for 20-second recording
-  List<double> _recentAudioLevels = [];
-  static const int vadHistorySize = 10; // Keep last 10 audio level samples
-  
-  // Speaking event tracking
-  List<Map<String, dynamic>> _speakingEvents = [];
-  bool _wasSpeaking = false; // Track previous speaking state
-  
-  // ML VAD variables
-  Interpreter? _vadInterpreter;
-  bool _mlVadEnabled = true;
-  bool _mlModelLoaded = false;
-  static const int mlInputSize = 1024; // ML model input size
-  static const int mlSampleRate = 16000; // ML model sample rate
-  List<double> _mlAudioBuffer = [];
-  List<double> _mlPredictions = [];
-  
-  // VAD Error state variables
-  String? _vadError;
-  bool _hasVadError = false;
-  DateTime? _lastVadError;
-  int _vadErrorCount = 0;
+  // Speech-to-Text variables
+  late Stt _stt;
+  bool _isListening = false;
+  String _transcription = '';
+  String _finalTranscription = '';
+  bool _hasPermission = false;
+  StreamSubscription? _sttStateSubscription;
+  StreamSubscription? _sttResultSubscription;
   
 
 
@@ -102,16 +69,16 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
     super.initState();
     _requestPermissions();
     _setupAudioPlayer();
-    _initializeMLVAD();
+    _initializeSTT();
   }
 
   @override
   void dispose() {
     _audioRecorder.dispose();
     _audioPlayer.dispose();
-    _stopVADMonitoring();
-    _vadInterpreter?.close();
-    _clearVadError(); // Clear any VAD errors
+    _sttStateSubscription?.cancel();
+    _sttResultSubscription?.cancel();
+    _stt.dispose();
     super.dispose();
   }
 
@@ -124,10 +91,7 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
       
       if (statuses[Permission.microphone] != PermissionStatus.granted) {
         _showToast('Microphone permission is required for voice recording');
-      } else {
-        // Clear VAD errors when permissions are granted
-        _clearVadError();
-      }
+      } 
     } else {
       // On mobile, request both microphone and storage permissions
       Map<Permission, PermissionStatus> statuses = await [
@@ -137,10 +101,7 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
       
       if (statuses[Permission.microphone] != PermissionStatus.granted) {
         _showToast('Microphone permission is required for voice recording');
-      } else {
-        // Clear VAD errors when permissions are granted
-        _clearVadError();
-      }
+      } 
     }
   }
 
@@ -165,9 +126,52 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
     });
   }
 
+  /// Initialize Speech-to-Text
+  void _initializeSTT() {
+    _stt = Stt();
+    
+    // Listen to STT state changes
+    _sttStateSubscription = _stt.onStateChanged.listen(
+      (state) {
+        setState(() {
+          if (state == SttState.start) {
+            _isListening = true;
+          } else if (state == SttState.stop) {
+            _isListening = false;
+            // When STT stops, also stop recording
+            if (_isRecording) {
+              _stopRecording();
+            }
+          }
+        });
+      },
+      onError: (error) {
+        _showToast('STT Error: $error');
+      },
+    );
+    
+    // Listen to STT results
+    _sttResultSubscription = _stt.onResultChanged.listen(
+      (result) {
+        setState(() {
+          _transcription = result.text;
+        });
+      },
+      onError: (error) {
+        _showToast('STT Result Error: $error');
+      },
+    );
+  }
+
   Future<void> _startRecording() async {
     try {
       if (await _audioRecorder.hasPermission()) {
+        // Check STT permission first
+        _hasPermission = await _stt.hasPermission();
+        if (!_hasPermission) {
+          _showToast('Speech-to-Text permission required');
+          return;
+        }
         String fileName = 'recording_${DateTime.now().millisecondsSinceEpoch}.m4a';
         
         if (kIsWeb) {
@@ -195,13 +199,13 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
         setState(() {
           _isRecording = true;
           _recordingDuration = Duration.zero;
-          _speakingEvents.clear(); // Clear previous speaking events
-          _wasSpeaking = false; // Reset speaking state
+          _transcription = '';
+          _finalTranscription = '';
         });
         
-        // Clear any previous VAD errors when starting a new recording
-        _clearVadError();
-
+        // Start STT
+        await _stt.start();
+        
         // Start 20-second recording timer
         _startRecordingTimer();
 
@@ -209,11 +213,9 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
         if (_filteringEnabled) {
           _startAudioProcessing();
         }
+        
 
-        // Start VAD monitoring
-        _startVADMonitoring();
-
-        _showToast('Recording started - 20 seconds');
+        _showToast('Recording started with Speech-to-Text');
       } else {
         _showToast('Microphone permission not granted');
       }
@@ -228,9 +230,9 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
       // This would be implemented with the record package's audio stream
       // For now, we'll process the audio after recording is complete
       _showToast('Audio filtering active - removing engine & road noise');
-      _clearVadError(); // Clear any previous VAD errors
+      
     } catch (e) {
-      _handleVadError('Failed to start audio processing: $e');
+      _showToast('Error starting audio processing: $e');
     }
   }
 
@@ -253,6 +255,14 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
   Future<void> _stopRecording() async {
     try {
       final String? path = await _audioRecorder.stop();
+      // Stop STT if it's running
+      if (_isListening) {
+        await _stt.stop();
+      }
+      
+      // Store final transcription
+      _finalTranscription = _transcription;
+      
       setState(() {
         _isRecording = false;
         // Use the path we set during start, or fall back to the returned path
@@ -261,12 +271,7 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
         }
       });
       
-      // Stop VAD monitoring
-      _stopVADMonitoring();
-      
-      // Clear VAD errors when recording stops
-      _clearVadError();
-      
+
       if (_recordedFilePath != null) {
         _showToast('Recording completed! Duration: ${_recordingDuration.inSeconds}s, Path: $_recordedFilePath');
         
@@ -382,39 +387,6 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
     );
   }
 
-  /// Handle VAD errors and display them on screen
-  void _handleVadError(String error, {bool isCritical = false}) {
-    setState(() {
-      _vadError = error;
-      _hasVadError = true;
-      _lastVadError = DateTime.now();
-      _vadErrorCount++;
-    });
-    
-    // Still show toast for critical errors or if user wants immediate feedback
-    if (isCritical) {
-      _showToast(error);
-    }
-    
-    // Auto-clear non-critical errors after 10 seconds
-    if (!isCritical) {
-      Timer(const Duration(seconds: 10), () {
-        if (_hasVadError && _vadError == error) {
-          _clearVadError();
-        }
-      });
-    }
-  }
-
-  /// Clear VAD errors
-  void _clearVadError() {
-    setState(() {
-      _vadError = null;
-      _hasVadError = false;
-      _vadErrorCount = 0;
-    });
-  }
-
   String _formatDuration(Duration duration) {
     String twoDigits(int n) => n.toString().padLeft(2, '0');
     String twoDigitMinutes = twoDigits(duration.inMinutes.remainder(60));
@@ -422,375 +394,15 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
     return "$twoDigitMinutes:$twoDigitSeconds";
   }
 
-  /// Apply frequency domain filtering to remove engine and road noise
-  List<double> _applyFrequencyFiltering(List<double> audioData) {
-    if (!_filteringEnabled) return audioData;
-    
-    // Apply bandpass filter (remove frequencies outside voice range)
-    List<double> filteredData = [];
-    
-    for (int i = 0; i < audioData.length; i++) {
-      double sample = audioData[i];
-      
-      // Apply high-pass filter (remove engine noise below 80Hz)
-      if (i > 0) {
-        double alpha = 1.0 / (1.0 + (2 * pi * lowFreqCutoff / sampleRate));
-        double prevSample = _audioBuffer.isNotEmpty ? _audioBuffer[i - 1] : 0.0;
-        sample = alpha * (sample + prevSample);
-      }
-      
-      // Apply low-pass filter (remove road noise above 8kHz)
-      if (i > 0) {
-        double alpha = 1.0 / (1.0 + (2 * pi * highFreqCutoff / sampleRate));
-        double prevSample = _audioBuffer.isNotEmpty ? _audioBuffer[i - 1] : 0.0;
-        sample = alpha * (sample + prevSample);
-      }
-      
-      // Apply noise gate (remove very low amplitude sounds)
-      if (sample.abs() < noiseGateThreshold) {
-        sample = 0.0;
-      }
-      
-      filteredData.add(sample);
-    }
-    
-    return filteredData;
-  }
-
-  /// Apply simple moving average filter for additional noise reduction
-  List<double> _applyMovingAverageFilter(List<double> audioData, int windowSize) {
-    if (audioData.length < windowSize) return audioData;
-    
-    List<double> filteredData = [];
-    
-    for (int i = 0; i < audioData.length; i++) {
-      double sum = 0.0;
-      int count = 0;
-      
-      // Calculate average over window
-      for (int j = -windowSize ~/ 2; j <= windowSize ~/ 2; j++) {
-        int index = i + j;
-        if (index >= 0 && index < audioData.length) {
-          sum += audioData[index];
-          count++;
-        }
-      }
-      
-      filteredData.add(sum / count);
-    }
-    
-    return filteredData;
-  }
-
-  /// Process audio data with frequency domain filtering
-  List<double> _processAudioData(List<double> rawAudioData) {
-    // Apply frequency domain filtering
-    List<double> filteredData = _applyFrequencyFiltering(rawAudioData);
-    
-    // Apply additional moving average filter for smoothness
-    filteredData = _applyMovingAverageFilter(filteredData, 5);
-    
-    return filteredData;
-  }
-
-  /// Convert audio data to bytes for recording
-  Uint8List _audioDataToBytes(List<double> audioData) {
-    List<int> bytes = [];
-    
-    for (double sample in audioData) {
-      // Convert double to 16-bit PCM
-      int pcmValue = (sample * 32767).round().clamp(-32768, 32767);
-      
-      // Convert to little-endian bytes
-      bytes.add(pcmValue & 0xFF);
-      bytes.add((pcmValue >> 8) & 0xFF);
-    }
-    
-    return Uint8List.fromList(bytes);
-  }
-
-  /// Calculate RMS (Root Mean Square) audio level for VAD
-  double _calculateAudioLevel(List<double> audioData) {
-    try {
-      if (audioData.isEmpty) return 0.0;
-      
-      double sum = 0.0;
-      for (double sample in audioData) {
-        sum += sample * sample;
-      }
-      return sqrt(sum / audioData.length);
-    } catch (e) {
-      _handleVadError('Audio level calculation failed: $e');
-      return 0.0; // Return 0 on error to indicate no audio level
-    }
-  }
-
-  /// Detect voice activity based on audio level and frequency characteristics
-  bool _detectVoiceActivity(List<double> audioData) {
-    try {
-      if (audioData.isEmpty) return false;
-      
-      // Calculate current audio level
-      double currentLevel = _calculateAudioLevel(audioData);
-      
-      // Add to recent levels history
-      _recentAudioLevels.add(currentLevel);
-      if (_recentAudioLevels.length > vadHistorySize) {
-        _recentAudioLevels.removeAt(0);
-      }
-      
-      // Calculate average level over recent samples
-      double avgLevel = _recentAudioLevels.reduce((a, b) => a + b) / _recentAudioLevels.length;
-      
-      // Voice activity detection logic
-      bool isVoice = currentLevel > vadThreshold && avgLevel > vadThreshold * 0.8;
-      
-      // Update voice activity state
-      if (isVoice) {
-        _lastVoiceActivity = DateTime.now();
-        _isVoiceActive = true;
-      } else {
-        _isVoiceActive = false;
-      }
-      
-      return isVoice;
-    } catch (e) {
-      _handleVadError('Basic VAD detection failed: $e');
-      return false; // Return false on error to indicate no voice activity
-    }
-  }
-
-  /// Start VAD monitoring during recording
-  void _startVADMonitoring() {
-    if (!_vadEnabled) return;
-    
-    try {
-      _vadTimer = Timer.periodic(Duration(milliseconds: vadUpdateIntervalMs), (timer) {
-        if (!_isRecording) {
-          timer.cancel();
-          return;
-        }
-        
-        // Simulate audio level monitoring (in real implementation, this would come from audio stream)
-        // For now, we'll use a simulated approach that works well on iOS
-        _simulateAudioLevelMonitoring();
-      });
-      
-      _showToast('Voice Activity Detection active');
-      _clearVadError(); // Clear any previous VAD errors
-    } catch (e) {
-      _handleVadError('Failed to start VAD monitoring: $e');
-    }
-  }
 
 
 
-  /// Simulate voice pattern for testing (replace with real audio analysis)
-  bool _simulateVoicePattern() {
-    try {
-      // This simulates typical speaking patterns
-      // In production, replace with actual audio analysis
-      int currentSecond = _recordingDuration.inSeconds;
-      
-      // Simulate speaking for first 3 seconds, then silence
-      if (currentSecond < 3) {
-        return true; // Voice active
-      } else if (currentSecond < 5) {
-        return false; // Silence
-      } else {
-        return true; // Voice active again
-      }
-    } catch (e) {
-      _handleVadError('Voice pattern simulation failed: $e');
-      return false; // Return false on error to indicate no voice activity
-    }
-  }
 
 
 
-  /// Stop VAD monitoring
-  void _stopVADMonitoring() {
-    _vadTimer?.cancel();
-    _recordingTimer?.cancel();
-    _vadTimer = null;
-    _recordingTimer = null;
-    _isVoiceActive = false;
-    _lastVoiceActivity = null;
-  }
 
-  /// Initialize ML-based VAD
-  Future<void> _initializeMLVAD() async {
-    try {
-      _showToast('Loading ML VAD model...');
-      
-      // Load the VAD model
-      _vadInterpreter = await Interpreter.fromAsset('assets/vad_model.tflite');
-      
-      if (_vadInterpreter != null) {
-        _mlModelLoaded = true;
-        _showToast('ML VAD model loaded successfully');
-        
-        // Initialize audio buffer
-        _mlAudioBuffer = List.filled(mlInputSize, 0.0);
-        _mlPredictions = List.filled(1, 0.0);
-        
-        _showToast('ML Voice Activity Detection ready');
-        _clearVadError(); // Clear any previous errors
-      } else {
-        _handleVadError('Failed to load ML model', isCritical: true);
-        _mlVadEnabled = false;
-      }
-    } catch (e) {
-      _handleVadError('ML VAD initialization failed: $e', isCritical: true);
-      _mlVadEnabled = false;
-    }
-  }
 
-  /// Preprocess audio data for ML model input
-  List<double> _preprocessAudioForML(List<double> audioData) {
-    if (audioData.length != mlInputSize) {
-      // Resize audio data to match ML model input
-      if (audioData.length > mlInputSize) {
-        audioData = audioData.sublist(0, mlInputSize);
-      } else {
-        audioData = [...audioData, ...List.filled(mlInputSize - audioData.length, 0.0)];
-      }
-    }
-    
-    // Normalize audio data to [-1, 1] range
-    double maxAmplitude = audioData.map((e) => e.abs()).reduce(max);
-    if (maxAmplitude > 0) {
-      audioData = audioData.map((e) => e / maxAmplitude).toList();
-    }
-    
-    return audioData;
-  }
 
-  /// Run ML model inference for VAD
-  double _runMLVADInference(List<double> audioData) {
-    if (!_mlModelLoaded || _vadInterpreter == null) {
-      return 0.0;
-    }
-    
-    try {
-      // Preprocess audio data
-      List<double> processedAudio = _preprocessAudioForML(audioData);
-      
-      // Prepare input tensor
-      var input = [processedAudio];
-      var output = [_mlPredictions];
-      
-      // Run inference
-      _vadInterpreter!.run(input, output);
-      
-      // Return prediction (probability of voice activity)
-      return output[0][0].toDouble();
-    } catch (e) {
-      _handleVadError('ML inference error: $e');
-      return 0.0;
-    }
-  }
-
-  /// ML-based voice activity detection
-  bool _detectVoiceActivityML(List<double> audioData) {
-    if (!_mlVadEnabled || !_mlModelLoaded) {
-      return _detectVoiceActivity(audioData); // Fallback to basic VAD
-    }
-    
-    try {
-      // Run ML model inference
-      double voiceProbability = _runMLVADInference(audioData);
-      
-      // Update ML predictions history
-      _mlPredictions.add(voiceProbability);
-      if (_mlPredictions.length > vadHistorySize) {
-        _mlPredictions.removeAt(0);
-      }
-      
-      // Calculate confidence from recent predictions
-      double avgConfidence = _mlPredictions.reduce((a, b) => a + b) / _mlPredictions.length;
-      
-      // Voice activity threshold (adjustable)
-      bool isVoice = voiceProbability > 0.6 && avgConfidence > 0.5;
-      
-      // Update voice activity state
-      if (isVoice) {
-        _lastVoiceActivity = DateTime.now();
-        _isVoiceActive = true;
-      } else {
-        _isVoiceActive = false;
-      }
-      
-      return isVoice;
-    } catch (e) {
-      _handleVadError('ML VAD error, using fallback: $e');
-      return _detectVoiceActivity(audioData);
-    }
-  }
-
-  /// Add speaking event to the list
-  void _addSpeakingEvent(String eventType, Duration timestamp) {
-    try {
-      if (_isRecording) {
-        setState(() {
-          _speakingEvents.add({
-            'type': eventType,
-            'timestamp': timestamp,
-            'time': '${timestamp.inSeconds}s',
-            'description': eventType == 'started' ? 'Someone started speaking' : 'Someone stopped speaking',
-          });
-        });
-        
-        // Show toast for speaking events
-        _showToast('${eventType == 'started' ? 'Speaking started' : 'Speaking stopped'} at ${timestamp.inSeconds}s');
-      }
-    } catch (e) {
-      _handleVadError('Failed to add speaking event: $e');
-    }
-  }
-
-  /// Enhanced audio level monitoring with ML VAD
-  void _simulateAudioLevelMonitoring() {
-    try {
-      // In a real implementation, this would analyze the actual audio stream
-      // For iOS compatibility, we'll use a simulated approach with ML enhancement
-      
-      // Simulate voice activity based on time patterns and ML enhancement
-      bool hasVoice = _simulateVoicePattern();
-      
-      // Apply ML VAD if available
-      if (_mlVadEnabled && _mlModelLoaded) {
-        // Simulate audio data for ML processing
-        List<double> simulatedAudio = List.generate(mlInputSize, (i) => 
-          hasVoice ? 0.3 + 0.2 * sin(i * 0.1) : 0.05 + 0.02 * sin(i * 0.05)
-        );
-        
-        hasVoice = _detectVoiceActivityML(simulatedAudio);
-      } else {
-        hasVoice = _detectVoiceActivity([]); // Use basic VAD
-      }
-      
-      // Track speaking events
-      if (hasVoice && !_wasSpeaking) {
-        // Someone started speaking
-        _addSpeakingEvent('started', _recordingDuration);
-        _wasSpeaking = true;
-      } else if (!hasVoice && _wasSpeaking) {
-        // Someone stopped speaking
-        _addSpeakingEvent('stopped', _recordingDuration);
-        _wasSpeaking = false;
-      }
-      
-      if (hasVoice) {
-        _lastVoiceActivity = DateTime.now();
-        _isVoiceActive = true;
-      } else {
-        _isVoiceActive = false;
-      }
-    } catch (e) {
-      _handleVadError('Audio monitoring failed: $e');
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -854,126 +466,69 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
                         color: Colors.red,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    // VAD Status during recording
-                    if (_vadEnabled) ...[
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                    const SizedBox(height: 16),
+                    // Real-time Transcription Display
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.blue[50],
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.blue[200]!),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(
-                            _isVoiceActive ? Icons.record_voice_over : Icons.volume_off,
-                            color: _isVoiceActive ? Colors.green : Colors.orange,
-                            size: 20,
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.mic,
+                                color: Colors.blue[600],
+                                size: 20,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Live Transcription',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.blue[700],
+                                ),
+                              ),
+                              const Spacer(),
+                              if (_isListening) ...[
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: Colors.green,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'Listening',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.green[600],
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(height: 12),
                           Text(
-                            _isVoiceActive ? 'Voice Detected' : 'Silence Detected',
+                            _transcription.isNotEmpty ? _transcription : 'Start speaking...',
                             style: TextStyle(
-                              fontSize: 14,
-                              color: _isVoiceActive ? Colors.green[700] : Colors.orange[700],
-                              fontWeight: FontWeight.w500,
+                              fontSize: 16,
+                              color: _transcription.isNotEmpty ? Colors.blue[800] : Colors.blue[400],
+                              fontStyle: _transcription.isNotEmpty ? FontStyle.normal : FontStyle.italic,
                             ),
                           ),
                         ],
                       ),
-                      if (_mlVadEnabled && _mlModelLoaded) ...[
-                        const SizedBox(height: 4),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.psychology,
-                              color: Colors.purple,
-                              size: 16,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              'AI Detection Active',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.purple[600],
-                                fontStyle: FontStyle.italic,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ],
-                    
-                    // Speaking Events Display
-                    if (_speakingEvents.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[50],
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.grey[300]!),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.chat_bubble_outline,
-                                  color: Colors.blue[600],
-                                  size: 16,
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  'Speaking Events',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.blue[700],
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            ...(_speakingEvents.map((event) => Container(
-                              margin: const EdgeInsets.only(bottom: 4),
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: event['type'] == 'started' ? Colors.green[50] : Colors.orange[50],
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(
-                                  color: event['type'] == 'started' ? Colors.green[300]! : Colors.orange[300]!,
-                                ),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    event['type'] == 'started' ? Icons.mic : Icons.mic_off,
-                                    color: event['type'] == 'started' ? Colors.green[600] : Colors.orange[600],
-                                    size: 14,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    event['description'],
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: event['type'] == 'started' ? Colors.green[700] : Colors.orange[700],
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                  const Spacer(),
-                                  Text(
-                                    event['time'],
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: Colors.grey[600],
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            )).toList()),
-                          ],
-                        ),
-                      ),
-                    ],
+                    ),
                   ],
                   const SizedBox(height: 16),
                   // Audio Filtering Toggle
@@ -1006,11 +561,9 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
                             : 'Noise filtering disabled');
                           
                           // Clear VAD errors when enabling noise filtering
-                          if (value) {
-                            _clearVadError();
-                          }
+                          
                         },
-                        activeColor: Colors.green,
+                        activeThumbColor: Colors.green,
                         activeTrackColor: Colors.green[200],
                       ),
                     ],
@@ -1026,143 +579,28 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
                       ),
                     ),
                   ],
-                  const SizedBox(height: 16),
-                  // VAD Toggle
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        _vadEnabled ? Icons.record_voice_over : Icons.voice_over_off,
-                        color: _vadEnabled ? Colors.orange : Colors.grey,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Voice Activity Detection',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: _vadEnabled ? Colors.orange[700] : Colors.grey[600],
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Switch(
-                        value: _vadEnabled,
-                        onChanged: (value) {
-                          setState(() {
-                            _vadEnabled = value;
-                          });
-                          _showToast(_vadEnabled 
-                            ? 'VAD enabled - auto-stop on silence' 
-                            : 'VAD disabled - manual stop only');
-                          
-                          // Clear VAD errors when toggling
-                          if (value) {
-                            _clearVadError();
-                          }
-                        },
-                        activeColor: Colors.orange,
-                        activeTrackColor: Colors.orange[200],
-                      ),
-                    ],
-                  ),
-                  if (_vadEnabled) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'Always records for 20 seconds - tracks speaking events',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.blue[600],
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 16),
-                  // ML VAD Toggle
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        _mlVadEnabled && _mlModelLoaded ? Icons.psychology : Icons.psychology_outlined,
-                        color: _mlVadEnabled && _mlModelLoaded ? Colors.purple : Colors.grey,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'ML VAD',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: _mlVadEnabled && _mlModelLoaded ? Colors.purple[700] : Colors.grey[600],
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Switch(
-                        value: _mlVadEnabled && _mlModelLoaded,
-                        onChanged: _mlModelLoaded ? (value) {
-                          setState(() {
-                            _mlVadEnabled = value;
-                          });
-                          _showToast(_mlVadEnabled 
-                            ? 'ML VAD enabled - AI-powered detection' 
-                            : 'ML VAD disabled - using basic detection');
-                          
-                          // Clear VAD errors when enabling ML VAD
-                          if (value) {
-                            _clearVadError();
-                          }
-                        } : null,
-                        activeColor: Colors.purple,
-                        activeTrackColor: Colors.purple[200],
-                      ),
-                    ],
-                  ),
-                  if (_mlVadEnabled && _mlModelLoaded) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'AI-powered voice detection - tracks speaking start/stop',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.purple[600],
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ] else if (!_mlModelLoaded) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'ML model not loaded - using basic VAD',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ],
+
                 ],
               ),
             ),
             
             // VAD Error Display
-            if (_hasVadError) ...[
-              const SizedBox(height: 16),
+            
+            
+            const SizedBox(height: 30),
+            
+            // Final Transcription Display
+            if (_finalTranscription.isNotEmpty) ...[
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
-                  color: _vadError != null && _vadError!.contains('ML') 
-                    ? Colors.purple[50] 
-                    : Colors.red[50],
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: _vadError != null && _vadError!.contains('ML') 
-                      ? Colors.purple[300]! 
-                      : Colors.red[300]!
-                  ),
+                  color: Colors.green[50],
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.green[200]!),
                   boxShadow: [
                     BoxShadow(
-                      color: (_vadError != null && _vadError!.contains('ML') 
-                        ? Colors.purple 
-                        : Colors.red).withValues(alpha: 0.1),
+                      color: Colors.green.withValues(alpha: 0.1),
                       spreadRadius: 1,
                       blurRadius: 4,
                       offset: const Offset(0, 2),
@@ -1175,142 +613,35 @@ class _VoiceRecorderDemoState extends State<VoiceRecorderDemo> {
                     Row(
                       children: [
                         Icon(
-                          _vadError != null && _vadError!.contains('ML') 
-                            ? Icons.psychology 
-                            : Icons.error_outline,
-                          color: _vadError != null && _vadError!.contains('ML') 
-                            ? Colors.purple[600] 
-                            : Colors.red[600],
+                          Icons.check_circle,
+                          color: Colors.green[600],
                           size: 20,
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          _vadError != null && _vadError!.contains('ML') 
-                            ? 'ML VAD Error' 
-                            : 'VAD Error',
+                          'Final Transcription',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: _vadError != null && _vadError!.contains('ML') 
-                              ? Colors.purple[700] 
-                              : Colors.red[700],
-                          ),
-                        ),
-                        if (_vadErrorCount > 1) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: _vadError != null && _vadError!.contains('ML') 
-                                ? Colors.purple[200] 
-                                : Colors.red[200],
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              '$_vadErrorCount',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: _vadError != null && _vadError!.contains('ML') 
-                                  ? Colors.purple[700] 
-                                  : Colors.red[700],
-                              ),
-                            ),
-                          ),
-                        ],
-                        const Spacer(),
-                        // Retry button for ML VAD errors
-                        if (_vadError != null && _vadError!.contains('ML')) ...[
-                          IconButton(
-                            onPressed: () {
-                              _clearVadError();
-                              _initializeMLVAD();
-                            },
-                            icon: Icon(
-                              Icons.refresh,
-                              color: _vadError != null && _vadError!.contains('ML') 
-                                ? Colors.purple[400] 
-                                : Colors.red[400],
-                              size: 18,
-                            ),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(
-                              minWidth: 32,
-                              minHeight: 32,
-                            ),
-                            tooltip: 'Retry ML VAD initialization',
-                          ),
-                          const SizedBox(width: 8),
-                        ],
-                        IconButton(
-                          onPressed: _clearVadError,
-                                                      icon: Icon(
-                              Icons.close,
-                              color: _vadError != null && _vadError!.contains('ML') 
-                                ? Colors.purple[400] 
-                                : Colors.red[400],
-                              size: 18,
-                            ),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                            minWidth: 32,
-                            minHeight: 32,
+                            color: Colors.green[700],
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 12),
                     Text(
-                      _vadError ?? 'Unknown error occurred',
+                      _finalTranscription,
                       style: TextStyle(
-                        fontSize: 14,
-                        color: _vadError != null && _vadError!.contains('ML') 
-                          ? Colors.purple[600] 
-                          : Colors.red[600],
+                        fontSize: 16,
+                        color: Colors.green[800],
+                        height: 1.4,
                       ),
-                    ),
-                    if (_lastVadError != null) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        'Occurred at: ${_lastVadError!.hour.toString().padLeft(2, '0')}:${_lastVadError!.minute.toString().padLeft(2, '0')}:${_lastVadError!.second.toString().padLeft(2, '0')}}',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: _vadError != null && _vadError!.contains('ML') 
-                            ? Colors.purple[500] 
-                            : Colors.red[500],
-                          fontStyle: FontStyle.italic,
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.info_outline,
-                          color: _vadError != null && _vadError!.contains('ML') 
-                            ? Colors.purple[400] 
-                            : Colors.red[400],
-                          size: 16,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          'VAD errors are displayed here instead of toast messages',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: _vadError != null && _vadError!.contains('ML') 
-                              ? Colors.purple[400] 
-                              : Colors.red[400],
-                            fontStyle: FontStyle.italic,
-                          ),
-                        ),
-                      ],
                     ),
                   ],
                 ),
               ),
+              const SizedBox(height: 20),
             ],
-            
-            const SizedBox(height: 30),
             
             // Recording Controls
             Row(
