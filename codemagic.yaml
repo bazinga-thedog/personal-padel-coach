@@ -7,11 +7,6 @@ workflows:
     # A human-readable name for the workflow.
     name: "React Native iOS Test Build and Distribute"
     
-    # Trigger the build manually from the Codemagic UI.
-    triggering:
-      manual_trigger:
-        enabled: true
-    
     # Specify the instance type for the build. Mac mini M1 is a good default.
     instance_type: mac_mini_m2
     
