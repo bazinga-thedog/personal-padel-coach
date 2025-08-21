@@ -29,8 +29,8 @@ workflows:
       - name: Install CocoaPods dependencies
         script: |
           cd ios && pod install
-      - name: Set up code signing settings on Xcode project
+      - name: Set up code signing identities
         script: |
-          xcode-project use-profiles --warn-only
+          app-store-connect fetch-signing-files com.personalcoach.padel --create --type IOS_APP_DEVELOPMENT --platform IOS --issuer-id cfa20d66-4afd-4922-85f7-9fbacefc7b21 --key-id 5KMXA4J2W3 --private-key @env:AUTH_KEY --certificate-key @env:CERTIFICATE_KEY
     artifacts:
         - build/ios/ipa/*.ipa
