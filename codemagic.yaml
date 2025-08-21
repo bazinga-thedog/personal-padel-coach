@@ -20,9 +20,12 @@ workflows:
       - name: Install npm dependencies
         script: |
           npm install
+      - name: Clear CocoaPods dependencies
+        script: |
+          cd ios && pod cache clean boost
       - name: Install CocoaPods dependencies
         script: |
-          cd ios && pod install
+          pod install
       - name: Set up code signing settings on Xcode project
         script: |
           xcode-project use-profiles --warn-only
