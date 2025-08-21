@@ -16,8 +16,6 @@ workflows:
           xcode-project build-ipa \
           --workspace "$CM_BUILD_DIR/ios/$XCODE_WORKSPACE" \
           --scheme "$XCODE_SCHEME"
+          --export-method development
     artifacts:
         - build/ios/ipa/*.ipa
-    code_signing:
-      xcode: automatic
-      distribution_type: development
