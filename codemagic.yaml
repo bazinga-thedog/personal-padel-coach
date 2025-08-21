@@ -11,12 +11,6 @@ workflows:
         XCODE_WORKSPACE: "PersonalPadelCoach.xcworkspace" # <-- Name of your Xcode workspace
         XCODE_SCHEME: "PersonalPadelCoach" # <-- Name of your Xcode scheme
     scripts:
-      - name: Build ipa for distribution
-        script: | 
-          xcode-project build-ipa \
-          --workspace "$CM_BUILD_DIR/ios/$XCODE_WORKSPACE" \
-          --scheme "$XCODE_SCHEME"
-    scripts:
       - name: Install npm dependencies
         script: |
           npm install
@@ -32,5 +26,10 @@ workflows:
       - name: Set up code signing identities
         script: |
           app-store-connect fetch-signing-files com.personalcoach.padel --create --type IOS_APP_DEVELOPMENT --platform IOS --issuer-id cfa20d66-4afd-4922-85f7-9fbacefc7b21 --key-id 5KMXA4J2W3 --private-key @env:AUTH_KEY --certificate-key @env:CERTIFICATE_KEY
+      - name: Build ipa for distribution
+        script: | 
+          xcode-project build-ipa \
+          --workspace "$CM_BUILD_DIR/ios/$XCODE_WORKSPACE" \
+          --scheme "$XCODE_SCHEME"    
     artifacts:
         - build/ios/ipa/*.ipa
