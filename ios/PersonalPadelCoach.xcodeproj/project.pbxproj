@@ -96,7 +96,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 83CBB9FA1A601CBA00E9B192 /* Build configuration list for PBXProject "PersonalPadelCoach" */;
+			buildConfigurationList = 83CBBA1F1A601CBA00E9B192 /* Build configuration list for PBXProject "PersonalPadelCoach" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
