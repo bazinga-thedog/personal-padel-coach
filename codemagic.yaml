@@ -6,6 +6,8 @@ workflows:
     integrations:
       app_store_connect: Codemagic
     environment:
+      groups:
+        - Store
       vars:
         BUNDLE_ID: "com.personalcoach.padel"
         XCODE_WORKSPACE: "PersonalPadelCoach.xcworkspace" # <-- Name of your Xcode workspace
