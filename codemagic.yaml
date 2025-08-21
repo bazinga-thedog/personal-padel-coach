@@ -1,6 +1,7 @@
 workflows:
   ios-workflow-id:
     name: iOS Sample Workflow
+    distribution_type: development
     max_build_duration: 120
     instance_type: mac_mini_m2
     integrations:
