@@ -8,6 +8,8 @@ workflows:
     environment:
       ios_signing:
         distribution_type: development
+        certificate: "Personal Padel Coach"
+        provisioning_profile: "Personal Padel Coach"
       vars:
         BUNDLE_ID: "com.personalcoach.padel"
         XCODE_WORKSPACE: "PersonalPadelCoach.xcworkspace" # <-- Name of your Xcode workspace
