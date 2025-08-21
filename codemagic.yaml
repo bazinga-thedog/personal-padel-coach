@@ -12,8 +12,6 @@ workflows:
     
     # Define the build environment. This includes Node, npm, and Xcode versions.
     environment:
-      # We don't need Flutter for a React Native build.
-      flutter: null
       
       # Use the latest stable Xcode and a supported Node.js version.
       xcode: latest
