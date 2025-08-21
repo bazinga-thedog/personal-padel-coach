@@ -7,8 +7,9 @@ workflows:
       app_store_connect: Codemagic
     environment:
       ios_signing:
-        distribution_type: development
-        bundle_identifier: com.personalcoach.padel
+        profile_type: development
+        certificate: "Personal Padel Coach"
+        provisioning_profile: "Personal Padel Coach"
       vars:
         BUNDLE_ID: "com.personalcoach.padel"
         XCODE_WORKSPACE: "PersonalPadelCoach.xcworkspace" # <-- Name of your Xcode workspace
