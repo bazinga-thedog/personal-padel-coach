@@ -31,6 +31,8 @@ workflows:
       - name: Set up code signing identities
         script: |
           keychain initialize
+      - script: keychain add-certificates
+      - script: xcode-project use-profiles
       - name: Build ipa for distribution
         script: | 
           xcode-project build-ipa \
