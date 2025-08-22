@@ -38,6 +38,7 @@ workflows:
           xcode-project build-ipa \
           --workspace "$CM_BUILD_DIR/ios/$XCODE_WORKSPACE" \
           --scheme "$XCODE_SCHEME" \
-          --automatic-code-signing    
+          --team-id "FL3AGP4HDV" \
+          --use-fastlane-auth  
     artifacts:
         - build/ios/ipa/*.ipa
