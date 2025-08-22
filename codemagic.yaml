@@ -28,6 +28,9 @@ workflows:
       - name: Install CocoaPods dependencies
         script: |
           cd ios && pod install
+      - name: Generate the bundle file and add it to your Xcode project
+        script: |
+          npm run build:ios
       - name: Set up code signing identities
         script: |
           keychain initialize
