@@ -43,14 +43,14 @@ target 'PersonalPadelCoach' do
 
   post_install do |installer|
     installer.pods_project.targets.each do |target|
-      if target.name == 'Flipper-Folly'
-        target.build_configurations.each do |config|
-          config.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++17'
-        end
-      end
-      if target.name == 'FlipperKit'
-        target.build_configurations.each do |config|
-          config.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++17'
+      if target.name == 'Flipper'
+        file_path = 'Pods/Headers/Private/Flipper/FlipperTransportTypes.h'
+        contents = File.read(file_path)
+        unless contents.include?('#include <functional>')
+          File.open(file_path, 'w') do |file|
+            file.puts('#include <functional>')
+            file.puts(contents)
+          end
         end
       end
     end
