@@ -24,7 +24,7 @@ workflows:
           cd ios && pod cache clean boost
       - name: Install boost
         script: |
-          cp boost.podspec node_modules/react-native/third-party-podspecs/boost.podspec
+          # cp boost.podspec node_modules/react-native/third-party-podspecs/boost.podspec
       - name: Install CocoaPods dependencies
         script: |
           cd ios && pod install
