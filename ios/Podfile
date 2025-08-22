@@ -42,6 +42,18 @@ target 'PersonalPadelCoach' do
   )
 
   post_install do |installer|
+    installer.pods_project.targets.each do |target|
+      if target.name == 'Flipper-Folly'
+        target.build_configurations.each do |config|
+          config.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++17'
+        end
+      end
+      if target.name == 'FlipperKit'
+        target.build_configurations.each do |config|
+          config.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++17'
+        end
+      end
+    end
     # https://github.com/facebook/react-native/blob/main/packages/react-native/scripts/react_native_pods.rb#L197-L202
     react_native_post_install(
       installer,
